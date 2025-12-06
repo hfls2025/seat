@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>学生随机座位分配工具</title>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', 'PingFang SC', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh; padding: 20px;
+        }
+        .container { max-width: 1000px; margin: 0 auto; }
+        h1 {
+            text-align: center; color: white; margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        .controls {
+            background: white; border-radius: 16px; padding: 20px;
+            margin-bottom: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            display: flex; gap: 15px; flex-wrap: wrap; align-items: center; justify-content: center;
+        }
+        .btn {
+            padding: 12px 24px; border: none; border-radius: 8px;
+            font-size: 15px; cursor: pointer; transition: all 0.3s;
+        }
+        .btn-primary { background: linear-gradient(135deg, #667eea, #764ba2); color: white; }
+        .btn-success { background: linear-gradient(135deg, #11998e, #38ef7d); color: white; }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 5px 20px rgba(0,0,0,0.2); }
+        #fileInput { display: none; }
+        .file-label {
+            padding: 12px 24px; background: linear-gradient(135deg, #f093fb, #f5576c);
+            color: white; border-radius: 8px; cursor: pointer; transition: all 0.3s;
+        }
+        .file-label:hover { transform: translateY(-2px); }
+        .classroom {
+            background: white; border-radius: 16px; padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2); position: relative;
+        }
+        .podium {
+            background: linear-gradient(135deg, #2c3e50, #34495e);
+            color: white; text-align: center; padding: 15px;
+            border-radius: 10px; margin-top: 30px; font-size: 18px;
+        }
+        .seats { display: flex; flex-direction: column; gap: 15px; position: relative; }
+        .row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; }
+        .seat {
+            aspect-ratio: 1; border-radius: 12px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+            font-size: 14px; position: relative;
+            border: 3px solid transparent;
+        }
+        .seat.occupied {
+            background: linear-gradient(135deg, #a8edea, #fed6e3);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        .seat.empty { background: #f0f0f0; color: #999; }
+        .seat .name { font-weight: 600; text-align: center; word-break: break-all; }
+        .seat .group {
+            position: absolute; top: 5px; right: 5px;
+            background: rgba(0,0,0,0.6); color: white;
+            font-size: 10px; padding: 2px 6px; border-radius: 10px;
+        }
+        .group-1 { border-color: #e74c3c; }
+        .group-2 { border-color: #3498db; }
+        .group-3 { border-color: #2ecc71; }
+        .group-4 { border-color: #f39c12; }
+        .group-5 { border-color: #9b59b6; }
+        .group-6 { border-color: #1abc9c; }
+
+        
+        /* 动画相关 */
+        .seat-animate {
+            position: absolute;
+            transition: all 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎓 学生随机座位分配工具</h1>
+        <div class="controls">
+            <input type="file" id="fileInput" accept=".xlsx,.xls">
+            <label for="fileInput" class="file-label">📁 导入Excel名单</label>
+            <button class="btn btn-primary" onclick="shuffle()">🎲 随机分配座位</button>
+            <button class="btn btn-success" onclick="exportImage()">📷 导出图片</button>
+        </div>
+        <div class="classroom">
+            <div class="seats" id="seats"></div>
+
+            <div class="podium">📚 讲 台</div>
+        </div>
+    </div>
+
+    <script>
+        let students = [];
+        let currentOrder = [];
+        const ROWS = 3, COLS = 7, TOTAL = ROWS * COLS;
+
+        document.getElementById('fileInput').addEventListener('change', e => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = evt => {
+                const wb = XLSX.read(evt.target.result, {type: 'binary'});
+                const ws = wb.Sheets[wb.SheetNames[0]];
+                const data = XLSX.utils.sheet_to_json(ws, {header: 1});
+                students = data.flat().filter(n => n && String(n).trim());
+                if (students.length > TOTAL) {
+                    alert(`学生人数(${students.length})超过座位数(${TOTAL})，将只取前${TOTAL}人`);
+                    students = students.slice(0, TOTAL);
+                }
+                currentOrder = [...students];
+                render(currentOrder, false);
+            };
+            reader.readAsBinaryString(file);
+        });
+
+        function shuffle() {
+            if (!students.length) { alert('请先导入学生名单'); return; }
+            const newOrder = [...students].sort(() => Math.random() - 0.5);
+            animateShuffle(currentOrder, newOrder);
+            currentOrder = newOrder;
+        }
+
+        function getPositions() {
+            const seats = document.querySelectorAll('.seat.occupied');
+            const positions = {};
+            seats.forEach(seat => {
+                const name = seat.querySelector('.name')?.textContent;
+                if (name) {
+                    const rect = seat.getBoundingClientRect();
+                    const containerRect = document.getElementById('seats').getBoundingClientRect();
+                    positions[name] = {
+                        x: rect.left - containerRect.left,
+                        y: rect.top - containerRect.top,
+                        w: rect.width,
+                        h: rect.height
+                    };
+                }
+            });
+            return positions;
+        }
+
+        function animateShuffle(oldOrder, newOrder) {
+            const oldPositions = getPositions();
+            const groups = assignGroups(newOrder.length);
+            const seatsDiv = document.getElementById('seats');
+            
+            // 创建动画元素
+            const animElements = [];
+            oldOrder.forEach((name, i) => {
+                if (!oldPositions[name]) return;
+                const pos = oldPositions[name];
+                const g = groups[oldOrder.indexOf(name)];
+                const el = document.createElement('div');
+                el.className = `seat occupied group-${g} seat-animate`;
+                el.innerHTML = `<span class="name">${name}</span>`;
+                el.style.cssText = `left:${pos.x}px;top:${pos.y}px;width:${pos.w}px;height:${pos.h}px;`;
+                seatsDiv.appendChild(el);
+                animElements.push({ el, name });
+            });
+
+            // 渲染新布局（隐藏）
+            renderStatic(newOrder, true);
+            
+            // 获取新位置并动画
+            requestAnimationFrame(() => {
+                const newPositions = {};
+                document.querySelectorAll('.seat.occupied:not(.seat-animate)').forEach(seat => {
+                    const name = seat.querySelector('.name')?.textContent;
+                    if (name) {
+                        const rect = seat.getBoundingClientRect();
+                        const containerRect = seatsDiv.getBoundingClientRect();
+                        newPositions[name] = {
+                            x: rect.left - containerRect.left,
+                            y: rect.top - containerRect.top
+                        };
+                    }
+                });
+
+                requestAnimationFrame(() => {
+                    animElements.forEach(({ el, name }) => {
+                        const newPos = newPositions[name];
+                        if (newPos) {
+                            el.style.left = newPos.x + 'px';
+                            el.style.top = newPos.y + 'px';
+                        }
+                    });
+                });
+            });
+
+            // 动画结束后清理
+            setTimeout(() => {
+                animElements.forEach(({ el }) => el.remove());
+                renderStatic(newOrder, false);
+            }, 1300);
+        }
+
+        function renderStatic(list, hidden, showGroup = true) {
+            const groups = assignGroups(list.length);
+            const seatsDiv = document.getElementById('seats');
+            seatsDiv.querySelectorAll('.row').forEach(r => r.remove());
+            
+            for (let r = 0; r < ROWS; r++) {
+                const rowDiv = document.createElement('div');
+                rowDiv.className = 'row';
+                for (let c = 0; c < COLS; c++) {
+                    const idx = r * COLS + c;
+                    const seat = document.createElement('div');
+                    if (idx < list.length) {
+                        const g = groups[idx];
+                        seat.className = `seat occupied${showGroup ? ` group-${g}` : ''}`;
+                        seat.innerHTML = `<span class="name">${list[idx]}</span>${showGroup ? `<span class="group">第${g}组</span>` : ''}`;
+                        if (hidden) seat.style.opacity = '0';
+                    } else {
+                        seat.className = 'seat empty';
+                        seat.textContent = '空';
+                    }
+                    rowDiv.appendChild(seat);
+                }
+                seatsDiv.appendChild(rowDiv);
+            }
+        }
+
+        function render(list, animate) {
+            if (!animate) {
+                renderStatic(list, false, false);
+            }
+        }
+
+        // 5组：1,2,3组靠近讲台(最后两排)各4人，第4组4人右上，第5组5人左上L型
+        function assignGroups(n) {
+            const groups = new Array(n).fill(0);
+            // 第一排(最远离讲台)：第5组列0(1人) + 第4组列1-4(4人) + 第5组列5-6(2人)
+            // 第二排：第5组列0(1人) + 第1组列5-6(2人) + 其他
+            // 重新规划：
+            // 第1组: 列5-6的第2-3排(4人) 靠近讲台右侧
+            // 第2组: 列3-4的第2-3排(4人) 靠近讲台中间
+            // 第3组: 列1-2的第2-3排(4人) 靠近讲台左侧
+            // 第4组: 列3-6的第1排(4人) 右上
+            // 第5组: 列0的3排(3人) + 列1-2的第1排(2人) = 5人 L型左上
+            for (let c = 0; c < COLS; c++) {
+                // 第1排(r=0)
+                const idx0 = c;
+                if (idx0 < n) {
+                    if (c === 0) groups[idx0] = 5;
+                    else if (c <= 2) groups[idx0] = 5;
+                    else groups[idx0] = 4;
+                }
+                // 第2排(r=1)
+                const idx1 = COLS + c;
+                if (idx1 < n) {
+                    if (c === 0) groups[idx1] = 5;
+                    else if (c <= 2) groups[idx1] = 3;
+                    else if (c <= 4) groups[idx1] = 2;
+                    else groups[idx1] = 1;
+                }
+                // 第3排(r=2，最靠近讲台)
+                const idx2 = 2 * COLS + c;
+                if (idx2 < n) {
+                    if (c === 0) groups[idx2] = 5;
+                    else if (c <= 2) groups[idx2] = 3;
+                    else if (c <= 4) groups[idx2] = 2;
+                    else groups[idx2] = 1;
+                }
+            }
+            return groups;
+        }
+
+        function exportImage() {
+            const el = document.querySelector('.classroom');
+            html2canvas(el).then(canvas => {
+                const link = document.createElement('a');
+                link.download = '座位表.png';
+                link.href = canvas.toDataURL();
+                link.click();
+            });
+        }
+    </script>
+</body>
+</html>
